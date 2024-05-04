@@ -1,0 +1,9 @@
+*.csv
+*.xls
+*.xlsx
+*.db
+*.sql
+*.json
+*.xml
+*.RData
+*.rda
