@@ -1,0 +1,10 @@
+name: ds_capstone_project
+title:
+username: capstone-project-pools
+account: capstone-project-pools
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 11934055
+bundleId: 8576083
+url: https://capstone-project-pools.shinyapps.io/ds_capstone_project/
+version: 1
