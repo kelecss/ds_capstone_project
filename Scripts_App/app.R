@@ -6,6 +6,8 @@
 
 # Loading packages
 
+# Loading packages
+
 library(shiny)
 library(httr)
 library(XML)
@@ -45,6 +47,9 @@ pool_details <- lapply(pool, function(pool) {
 # Convert the list to a data frame for easier manipulation and viewing
 df_pools <- do.call(rbind.data.frame, pool_details)
 
+if (class(df_pools$Wassertemperatur) %in% c("factor", "character")) {
+  df_pools$Wassertemperatur <- as.numeric(as.character(df_pools$Wassertemperatur))
+}
 
 ## Getting the Locations
 
@@ -69,7 +74,9 @@ df_pools <- merge(df_pools, df_pools_coordinates, by = "Title")
 ui <- dashboardPage(
   dashboardHeader(title = "Pool Dashboard"),
   dashboardSidebar(
-    sliderInput("temperatur", "Wassertemperatur", min = 0, max = 35, value = c(0, 35)),
+    sliderInput("temperatur", "Wassertemperatur", min = min(df_pools$Wassertemperatur, na.rm = TRUE), 
+                max = max(df_pools$Wassertemperatur, na.rm = TRUE), value = c(min(df_pools$Wassertemperatur, na.rm = TRUE), 
+                                                                              max(df_pools$Wassertemperatur, na.rm = TRUE))),
     selectInput("status", "Status", choices = c("Alle", "offen", "geschlossen")),
     selectInput("title", "Name des Bades", choices = c("Alle", "Please select")),
     width = 250
@@ -83,10 +90,10 @@ ui <- dashboardPage(
         }
       "))
     ),
-    leafletOutput("map")
+    leafletOutput("map", width = "100%", height = "100%")
   )
 )
-   
+
 # Setting up server element
 
 
