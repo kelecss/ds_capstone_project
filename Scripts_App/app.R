@@ -13,6 +13,7 @@ library(bslib)
 library(leaflet)
 library(tidyverse)
 library(sf)
+library(shinydashboard)
 
 url <- "https://www.stadt-zuerich.ch/stzh/bathdatadownload"
 
@@ -65,58 +66,73 @@ df_pools <- merge(df_pools, df_pools_coordinates, by = "Title")
 
 # Setting up User Interface (ui)
 
-ui <- fluidPage(
-  sidebarLayout(
-    sidebarPanel(
-      sliderInput("temperatur", "Temperatur", min = 0, max = 35, value = c(0, 35))
+ui <- dashboardPage(
+  dashboardHeader(title = "Pool Dashboard"),
+  dashboardSidebar(
+    sliderInput("temperatur", "Wassertemperatur", min = 0, max = 35, value = c(0, 35)),
+    selectInput("status", "Status", choices = c("Alle", "offen", "geschlossen")),
+    selectInput("title", "Name des Bades", choices = c("Alle", "Please select")),
+    width = 250
+  ),
+  dashboardBody(
+    tags$head(
+      tags$style(HTML("
+        /* Ensure the map fills the height and adjusts for the header height */
+        .leaflet-container {
+          height: calc(100vh - 80px) !important; /* Adjust if your header is a different height */
+        }
+      "))
     ),
-  mainPanel(
-      tags$style(type = "text/css", 
-                 ".outer {
-                position: fixed; 
-                top: 0; /* Adjust top margin to align below the title panel */
-                left: 0; 
-                right: 0; 
-                bottom: 0; 
-                overflow: hidden; 
-                padding: 0;
-              }
-              .leaflet-container {
-                height: 100vh !important; 
-                width: 100vw !important;
-              }"
-      ),
-      div(class = "outer",
-          leafletOutput(outputId = "map", width = "100%", height = "100%")
-      )
-    )
+    leafletOutput("map")
   )
 )
-
+   
 # Setting up server element
 
 
-server = function(input, output){
-map_df = reactive({df_pools %>%
-    filter(Wassertemperatur > input$temperatur[1] & Wassertemperatur < input$temperatur[2]) %>%
-    filter(!is.na(Longitude) & !is.na(Latitude)) %>%
-    st_as_sf(coords = c("Longitude", "Latitude")) %>%
-    st_set_crs(4326)
+server = function(input, output, session) {
   
-})
-
-output$map = renderLeaflet({
-  leaflet() %>%
-    addTiles() %>%
-    setView(lng = 8.5417, lat = 47.3769, zoom = 12) %>%
-    addCircleMarkers(
-      data = map_df(),
-      popup = ~paste("<b>Bad:</b>", Title, "<br><strong>Wassertemperatur:</strong>", Wassertemperatur, "°C",
-                     "<br><b>Status</b>", Status, "<br>Zuletzt aktualisiert:", Update),
-      radius = 8,
-      color = '#007BFF',
-      fillOpacity = 0.7)
-})
+  observe({
+    sorted_titles <- sort(unique(df_pools$Title))
+    updateSelectInput(session, "title", choices = c("Alle", sorted_titles))
+  })
+  
+  map_df = reactive({
+    temp_filtered <- df_pools %>%
+      filter(Wassertemperatur >= input$temperatur[1], Wassertemperatur <= input$temperatur[2])
+    
+    status_filtered <- if (input$status != "Alle") {
+      temp_filtered %>%
+        filter(Status == input$status)
+    } else {
+      temp_filtered
+    }
+    
+    title_filtered <- if (input$title != "Alle") {
+      status_filtered %>%
+        filter(Title == input$title)
+    } else {
+      status_filtered
+    }
+    
+    title_filtered %>%
+      filter(!is.na(Longitude), !is.na(Latitude)) %>%
+      st_as_sf(coords = c("Longitude", "Latitude")) %>%
+      st_set_crs(4326)
+  })
+  
+  output$map = renderLeaflet({
+    leaflet() %>%
+      addTiles() %>%
+      setView(lng = 8.5417, lat = 47.3769, zoom = 12) %>%
+      addCircleMarkers(
+        data = map_df(),
+        popup = ~paste("<b>Bad:</b>", Title, "<br><strong>Wassertemperatur:</strong>", Wassertemperatur, "°C",
+                       "<br><b>Status</b>", Status, "<br>Zuletzt aktualisiert:", Update),
+        radius = 8,
+        color = '#007BFF',
+        fillOpacity = 0.7)
+  })
 }
 
 shinyApp(ui, server)
