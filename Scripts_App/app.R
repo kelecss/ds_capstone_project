@@ -4,11 +4,14 @@
 # Date Created: 2024_05_04
 # Date Updated: 2024_05_04
 
-# Loading packages
+#rsconnect::deployApp("/Users/kerimlengwiler/Desktop/R_Files/Introduction DS/DS Capstone Project/Scripts_App")
 
 # Loading packages
 
+# Loading packages
 
+library(remotes)
+library(openrouteservice)
 library(shiny)
 library(httr)
 library(XML)
