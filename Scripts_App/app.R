@@ -8,6 +8,7 @@
 
 # Loading packages
 
+
 library(shiny)
 library(httr)
 library(XML)
@@ -16,6 +17,7 @@ library(leaflet)
 library(tidyverse)
 library(sf)
 library(shinydashboard)
+library(fresh)
 
 url <- "https://www.stadt-zuerich.ch/stzh/bathdatadownload"
 
@@ -69,19 +71,38 @@ df_pools <- merge(df_pools, df_pools_coordinates, by = "Title")
 
 ###SHINY APP
 
+# Creating Theme
+capstone_theme <- create_theme(
+  adminlte_color(
+    light_blue = "#434C5E"
+  ),
+  adminlte_sidebar(
+    width = "400px",
+    dark_bg = "#D8DEE9",
+    dark_hover_bg = "#81A1C1",
+    dark_color = "#2E3440"
+  ),
+  adminlte_global(
+    content_bg = "#FFF",
+    box_bg = "#D8DEE9", 
+    info_box_bg = "#D8DEE9"
+  )
+)
 # Setting up User Interface (ui)
 
 ui <- dashboardPage(
-  dashboardHeader(title = "Pool Dashboard"),
+  dashboardHeader(title = tags$span("Freibäder Stadt Zürich", style = "font-weight: bold;")),
   dashboardSidebar(
     sliderInput("temperatur", "Wassertemperatur", min = min(df_pools$Wassertemperatur, na.rm = TRUE), 
                 max = max(df_pools$Wassertemperatur, na.rm = TRUE), value = c(min(df_pools$Wassertemperatur, na.rm = TRUE), 
                                                                               max(df_pools$Wassertemperatur, na.rm = TRUE))),
     selectInput("status", "Status", choices = c("Alle", "offen", "geschlossen")),
     selectInput("title", "Name des Bades", choices = c("Alle", "Please select")),
+    actionButton("update_location", "Standort aktualisieren", icon = icon("location-arrow")),
     width = 250
   ),
   dashboardBody(
+    use_theme(capstone_theme),
     tags$head(
       tags$style(HTML("
         /* Ensure the map fills the height and adjusts for the header height */
@@ -90,20 +111,88 @@ ui <- dashboardPage(
         }
       "))
     ),
+    tags$script(HTML("
+document.addEventListener('DOMContentLoaded', function() {
+  if (navigator.geolocation) {
+    navigator.geolocation.getCurrentPosition(showPosition, showError);
+  } else {
+    Shiny.setInputValue('geolocation_error', 'Geolocation is not supported by this browser.');
+  }
+  
+  function showPosition(position) {
+    Shiny.setInputValue('user_lat', position.coords.latitude);
+    Shiny.setInputValue('user_lon', position.coords.longitude);
+    Shiny.setInputValue('geolocation', 'Lat: ' + position.coords.latitude + ', Lon: ' + position.coords.longitude);
+  }
+  
+  function showError(error) {
+    switch(error.code) {
+      case error.PERMISSION_DENIED:
+        Shiny.setInputValue('geolocation_error', 'User denied the request for Geolocation.');
+        break;
+      case error.POSITION_UNAVAILABLE:
+        Shiny.setInputValue('geolocation_error', 'Location information is unavailable.');
+        break;
+      case error.TIMEOUT:
+        Shiny.setInputValue('geolocation_error', 'The request to get user location timed out.');
+        break;
+      case error.UNKNOWN_ERROR:
+        Shiny.setInputValue('geolocation_error', 'An unknown error occurred.');
+        break;
+    }
+  }
+});
+")),
     leafletOutput("map", width = "100%", height = "100%")
   )
 )
 
-# Setting up server element
+# Server
 
-
-server = function(input, output, session) {
+server <- function(input, output, session) {
+  # Printing latitude, longitude, and geolocation info
+  output$lat <- renderPrint({
+    req(input$user_lat)  
+    input$user_lat
+  })
   
+  output$long <- renderPrint({
+    req(input$user_lon)
+    input$user_lon
+  })
+  
+  output$geolocation <- renderPrint({
+    req(input$geolocation)
+    input$geolocation
+  })
+  
+  output$geo_error <- renderPrint({
+    input$geolocation_error
+  })
+  
+  # Observe the 'Update My Location' button click
+  observeEvent(input$update_location, {
+    session$sendCustomMessage(type = 'getLocation', message = 'update')
+  })
+  
+  # Custom message handler for initiating geolocation
+  tags$script(HTML("
+  Shiny.addCustomMessageHandler('getLocation', function(message) {
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(showPosition, showError, {enableHighAccuracy: true, timeout: 5000, maximumAge: 0});
+    } else {
+      Shiny.setInputValue('geolocation_error', 'Geolocation is not supported by this browser.');
+    }
+  });
+  "))
+  
+  # Updating the title select input
   observe({
     sorted_titles <- sort(unique(df_pools$Title))
     updateSelectInput(session, "title", choices = c("Alle", sorted_titles))
   })
   
+  # Reactive expression for filtered data
   map_df = reactive({
     temp_filtered <- df_pools %>%
       filter(Wassertemperatur >= input$temperatur[1], Wassertemperatur <= input$temperatur[2])
@@ -128,17 +217,34 @@ server = function(input, output, session) {
       st_set_crs(4326)
   })
   
-  output$map = renderLeaflet({
+  # Initial map rendering
+  output$map <- renderLeaflet({
     leaflet() %>%
       addTiles() %>%
-      setView(lng = 8.5417, lat = 47.3769, zoom = 12) %>%
+      setView(lng = 8.5417, lat = 47.3769, zoom = 12)  # Initial map view setup
+  })
+  
+  # Updating the map with user location and other markers
+  observe({
+    leafletProxy("map", data = NULL) %>%
+      clearMarkers()
+    
+    # Add user location marker if available
+    if (!is.null(input$user_lat) && !is.null(input$user_lon)) {
+      leafletProxy("map") %>%
+        addMarkers(lng = input$user_lon, lat = input$user_lat, popup = "Your location")
+    }
+    
+    # Add pool markers
+    leafletProxy("map") %>%
       addCircleMarkers(
         data = map_df(),
         popup = ~paste("<b>Bad:</b>", Title, "<br><strong>Wassertemperatur:</strong>", Wassertemperatur, "°C",
                        "<br><b>Status</b>", Status, "<br>Zuletzt aktualisiert:", Update),
         radius = 8,
         color = '#007BFF',
-        fillOpacity = 0.7)
+        fillOpacity = 0.7
+      )
   })
 }
 
