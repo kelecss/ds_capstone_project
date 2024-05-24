@@ -1,0 +1,10 @@
+name: scripts_app
+title:
+username: capstone-project-pools
+account: capstone-project-pools
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 11945584
+bundleId:
+url: https://capstone-project-pools.shinyapps.io/scripts_app/
+version: 1

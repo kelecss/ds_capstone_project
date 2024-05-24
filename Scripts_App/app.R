@@ -2,14 +2,14 @@
 # Description: This script taps into the Zurich Open Data API to extract data on the status of all public outdoor pools in Zurich.
 # Author: Kerim Lengwiler
 # Date Created: 2024_05_04
-# Date Updated: 2024_05_04
+# Date Updated: 2024_05_23
 
 #rsconnect::deployApp("/Users/kerimlengwiler/Desktop/R_Files/Introduction DS/DS Capstone Project/Scripts_App")
 
-# Loading packages
+file.edit("~/.Renviron")
+
 
 # Loading packages
-
 library(remotes)
 library(openrouteservice)
 library(shiny)
@@ -22,18 +22,20 @@ library(sf)
 library(shinydashboard)
 library(fresh)
 
+# API Key for OpenRouteService
+ors_api_key <- Sys.getenv("ORS_API_KEY") 
+
+# URL for pool data
 url <- "https://www.stadt-zuerich.ch/stzh/bathdatadownload"
 
-# Make the request
+# Make the request for pool data
 pool_response <- GET(url = url, query = list()) 
 http_status(pool_response)
 
 xml_data <- xmlParse(rawToChar(pool_response$content))
-
-
 pool <- getNodeSet(xml_data, "//bath")
 
-# Extract data for each bath
+# Extract data for each pool
 pool_details <- lapply(pool, function(pool) {
   title <- xmlValue(getNodeSet(pool, "./title")[[1]])
   temperatureWater <- xmlValue(getNodeSet(pool, "./temperatureWater")[[1]])
@@ -43,8 +45,8 @@ pool_details <- lapply(pool, function(pool) {
   urlPage <- xmlValue(getNodeSet(pool, "./urlPage")[[1]])
   pathPage <- xmlValue(getNodeSet(pool, "./pathPage")[[1]])
   
-  # Return a list of bath details
-  list(Title = title, Wassertemperatur = temperatureWater, ID = poiid, 
+# Return a list of pool details
+list(Title = title, Wassertemperatur = temperatureWater, ID = poiid, 
        Update = dateModified, Status = openClosedTextPlain, 
        URL_Page = urlPage, Path_Page = pathPage)
 })
@@ -56,8 +58,7 @@ if (class(df_pools$Wassertemperatur) %in% c("factor", "character")) {
   df_pools$Wassertemperatur <- as.numeric(as.character(df_pools$Wassertemperatur))
 }
 
-## Getting the Locations
-
+# Coordinates for the pools
 df_pools_coordinates <- data.frame(
   Title = c("Flussbad Au-Höngg","Flussbad Oberer Letten","Flussbad Unterer Letten", "Flussbad Unterer Letten Flussteil", "Frauenbad Stadthausquai", "Freibad Allenmoos","Freibad Auhof",
             "Freibad Dolder", "Freibad Heuried", "Freibad Letzigraben", "Freibad Seebach", "Freibad Zwischen den Hölzern", "Hallenbad Bläsi", "Hallenbad Bungertwies", "Hallenbad City",
@@ -68,11 +69,10 @@ df_pools_coordinates <- data.frame(
   Longitude = c(8.489321, 8.534956, 8.528608, 8.530987, 8.542030, 8.539013, 8.571462, 8.576269, 8.505399, 8.498366, 8.548195, 8.469622, 8.501876, 8.560206, 8.532868, 8.513683, 8.556734, 
                 8.532703, 8.536701, 8.495608, 8.547013, 8.534713, 8.557461, 8.537336, 8.518000))
 
-
 # Merging
 df_pools <- merge(df_pools, df_pools_coordinates, by = "Title")
 
-###SHINY APP
+### SHINY APP
 
 # Creating Theme
 capstone_theme <- create_theme(
@@ -91,8 +91,24 @@ capstone_theme <- create_theme(
     info_box_bg = "#D8DEE9"
   )
 )
-# Setting up User Interface (ui)
 
+# Route Function (Directions)
+get_route <- function(from_coords, to_coords) {
+  req(from_coords, to_coords)
+  tryCatch({
+    route <- ors_directions(api_key = ors_api_key,
+                            coordinates = list(from_coords, to_coords),
+                            profile = "foot-walking",
+                            format = "geojson")
+    print(paste("Route fetched from", from_coords, "to", to_coords))
+    return(route)
+  }, error = function(e) {
+    print(paste("Error fetching route:", e$message))
+    return(NULL)
+  })
+}
+
+## Setting up User Interface (ui)
 ui <- dashboardPage(
   dashboardHeader(title = tags$span("Freibäder Stadt Zürich", style = "font-weight: bold;")),
   dashboardSidebar(
@@ -102,15 +118,15 @@ ui <- dashboardPage(
     selectInput("status", "Status", choices = c("Alle", "offen", "geschlossen")),
     selectInput("title", "Name des Bades", choices = c("Alle", "Please select")),
     actionButton("update_location", "Standort aktualisieren", icon = icon("location-arrow")),
+    actionButton("show_route", "Route anzeigen", icon = icon("route")),
     width = 250
   ),
   dashboardBody(
     use_theme(capstone_theme),
     tags$head(
       tags$style(HTML("
-        /* Ensure the map fills the height and adjusts for the header height */
         .leaflet-container {
-          height: calc(100vh - 80px) !important; /* Adjust if your header is a different height */
+          height: calc(100vh - 80px) !important; 
         }
       "))
     ),
@@ -150,103 +166,140 @@ document.addEventListener('DOMContentLoaded', function() {
   )
 )
 
-# Server
-
+## Server
 server <- function(input, output, session) {
-  # Printing latitude, longitude, and geolocation info
-  output$lat <- renderPrint({
-    req(input$user_lat)  
-    input$user_lat
-  })
+  session$userData <- reactiveValues(selected_pool = NULL, user_location = NULL)
   
-  output$long <- renderPrint({
-    req(input$user_lon)
-    input$user_lon
-  })
+  # Observe the map marker click event  
+observeEvent(input$map_marker_click, {
+  req(input$map_marker_click)
+  session$userData$selected_pool <- c(input$map_marker_click$lng, input$map_marker_click$lat)  
+  showNotification("Standort Freibad ausgewählt.", type = "message")
+})
   
-  output$geolocation <- renderPrint({
-    req(input$geolocation)
-    input$geolocation
-  })
-  
-  output$geo_error <- renderPrint({
-    input$geolocation_error
-  })
-  
-  # Observe the 'Update My Location' button click
-  observeEvent(input$update_location, {
-    session$sendCustomMessage(type = 'getLocation', message = 'update')
-  })
-  
-  # Custom message handler for initiating geolocation
-  tags$script(HTML("
-  Shiny.addCustomMessageHandler('getLocation', function(message) {
-    if (navigator.geolocation) {
-      navigator.geolocation.getCurrentPosition(showPosition, showError, {enableHighAccuracy: true, timeout: 5000, maximumAge: 0});
-    } else {
-      Shiny.setInputValue('geolocation_error', 'Geolocation is not supported by this browser.');
-    }
-  });
-  "))
-  
-  # Updating the title select input
-  observe({
-    sorted_titles <- sort(unique(df_pools$Title))
-    updateSelectInput(session, "title", choices = c("Alle", sorted_titles))
-  })
-  
-  # Reactive expression for filtered data
-  map_df = reactive({
-    temp_filtered <- df_pools %>%
-      filter(Wassertemperatur >= input$temperatur[1], Wassertemperatur <= input$temperatur[2])
+observeEvent(input$show_route, {
+  req(session$userData$selected_pool, input$user_lat, input$user_lon)
+  session$userData$user_location <- c(input$user_lon, input$user_lat)  
     
-    status_filtered <- if (input$status != "Alle") {
-      temp_filtered %>%
-        filter(Status == input$status)
-    } else {
-      temp_filtered
-    }
+  from_coords <- session$userData$user_location
+  to_coords <- session$userData$selected_pool
     
-    title_filtered <- if (input$title != "Alle") {
-      status_filtered %>%
-        filter(Title == input$title)
-    } else {
-      status_filtered
-    }
+# Validate coordinates to ensure they are within Zurich area
+if (from_coords[1] < 8 || from_coords[1] > 9 || from_coords[2] < 47 || from_coords[2] > 48 ||
+    to_coords[1] < 8 || to_coords[1] > 9 || to_coords[2] < 47 || to_coords[2] > 48) {
+  showNotification("Coordinates are out of expected range.", type = "error")
+  return()
+}
+
+# Retrieve route from OpenRouteService
+route <- get_route(from_coords, to_coords)
     
-    title_filtered %>%
-      filter(!is.na(Longitude), !is.na(Latitude)) %>%
-      st_as_sf(coords = c("Longitude", "Latitude")) %>%
-      st_set_crs(4326)
+if (is.null(route)) {
+  showNotification("Route not found.", type = "error")
+  return()
+}
+    
+leafletProxy("map") %>% 
+  clearGroup("route") %>%  # Clear previous routes
+  addGeoJSON(route, color = "blue", weight = 5, opacity = 0.7, group = "route")  
+showNotification("Route angezeigt.", type = "message")
   })
   
-  # Initial map rendering
-  output$map <- renderLeaflet({
-    leaflet() %>%
-      addTiles() %>%
-      setView(lng = 8.5417, lat = 47.3769, zoom = 12)  # Initial map view setup
-  })
+# Printing latitude, longitude, and geolocation info
+output$lat <- renderPrint({
+  req(input$user_lat)  
+  input$user_lat
+})
   
-  # Updating the map with user location and other markers
-  observe({
-    leafletProxy("map", data = NULL) %>%
-      clearMarkers()
+output$long <- renderPrint({
+  req(input$user_lon)
+  input$user_lon
+})
+  
+output$geolocation <- renderPrint({
+  req(input$geolocation)
+  input$geolocation
+})
+  
+output$geo_error <- renderPrint({
+  input$geolocation_error
+})
+  
+# Observe the 'Update My Location' button click
+observeEvent(input$update_location, {
+  session$sendCustomMessage(type = 'getLocation', message = 'update')
+  showNotification("User location updated.", type = "message")
+})
+  
+# Custom message handler for initiating geolocation
+tags$script(HTML("
+Shiny.addCustomMessageHandler('getLocation', function(message) {
+  if (navigator.geolocation) {
+    navigator.geolocation.getCurrentPosition(showPosition, showError, {enableHighAccuracy: true, timeout: 5000, maximumAge: 0});
+  } else {
+    Shiny.setInputValue('geolocation_error', 'Geolocation is not supported by this browser.');
+  }
+});
+"))
+  
+# Updating the title select input
+observe({
+  sorted_titles <- sort(unique(df_pools$Title))
+  updateSelectInput(session, "title", choices = c("Alle", sorted_titles))
+})
+  
+# Reactive expression for filtered data
+map_df = reactive({
+  temp_filtered <- df_pools %>%
+    filter(Wassertemperatur >= input$temperatur[1], Wassertemperatur <= input$temperatur[2])
     
-    # Add user location marker if available
-    if (!is.null(input$user_lat) && !is.null(input$user_lon)) {
-      leafletProxy("map") %>%
-        addMarkers(lng = input$user_lon, lat = input$user_lat, popup = "Your location")
-    }
+  status_filtered <- if (input$status != "Alle") {
+    temp_filtered %>%
+      filter(Status == input$status)
+  } else {
+    temp_filtered
+  }
     
-    # Add pool markers
-    leafletProxy("map") %>%
-      addCircleMarkers(
-        data = map_df(),
-        popup = ~paste("<b>Bad:</b>", Title, "<br><strong>Wassertemperatur:</strong>", Wassertemperatur, "°C",
+title_filtered <- if (input$title != "Alle") {
+  status_filtered %>%
+    filter(Title == input$title)
+  } else {
+  status_filtered
+}
+    
+title_filtered %>%
+  filter(!is.na(Longitude), !is.na(Latitude)) %>%
+  st_as_sf(coords = c("Longitude", "Latitude")) %>%
+  st_set_crs(4326)
+})
+  
+# Initial map rendering
+output$map <- renderLeaflet({
+  leaflet() %>%
+    addTiles() %>%
+    setView(lng = 8.5417, lat = 47.3769, zoom = 12)  
+})
+  
+# Updating the map with user location and pool markers
+observe({
+  leafletProxy("map", data = NULL) %>%
+    clearMarkers()
+    
+# Add user location marker if available
+if (!is.null(input$user_lat) && !is.null(input$user_lon)) {
+  leafletProxy("map") %>%
+    addMarkers(lng = input$user_lon, lat = input$user_lat, popup = "Your location")
+  }
+    
+# Add pool markers
+leafletProxy("map") %>%
+  addCircleMarkers(
+    data = map_df(),
+    popup = ~paste("<b>Bad:</b>", Title, "<br><strong>Wassertemperatur:</strong>", Wassertemperatur, "°C",
                        "<br><b>Status</b>", Status, "<br>Zuletzt aktualisiert:", Update),
-        radius = 8,
-        color = '#007BFF',
-        fillOpacity = 0.7
+    radius = 8,
+    color = '#007BFF',
+    fillOpacity = 0.7
       )
   })
 }
