@@ -8,3 +8,4 @@
 *.RData
 *.rda
 .Rproj.user
+renv/library
